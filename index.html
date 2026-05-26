@@ -14,9 +14,7 @@
 		<!-- Header -->
 		<header class="header">
 			<div class="header-content">
-				<h1 class="logo">
-					PNG → OTBM
-				</h1>
+				<h1 class="logo">PNG to OTBM</h1>
 			</div>
 		</header>
 
@@ -25,7 +23,7 @@
 			<!-- Left Panel - Preview -->
 			<section class="panel preview-panel">
 				<div class="panel-header">
-					<h2>IMAGE PREVIEW</h2>
+					<h2>Image preview</h2>
 					<span class="image-info" id="imageInfo">No image loaded</span>
 				</div>
 				
@@ -46,9 +44,9 @@
 				
 				<div class="preview-container" id="previewContainer">
 					<div class="preview-placeholder" id="previewPlaceholder">
-						<div class="placeholder-icon">🖼️</div>
+						<div class="placeholder-icon" aria-hidden="true"></div>
 						<p>Drop a PNG file here</p>
-						<p class="placeholder-sub">or click the button below</p>
+						<p class="placeholder-sub">or browse from your computer</p>
 					</div>
 					<canvas id="previewCanvas"></canvas>
 					<div class="pixel-info" id="pixelInfo"></div>
@@ -57,7 +55,7 @@
 				<div class="import-section">
 					<input type="file" id="fileInput" accept="image/*" hidden aria-label="Select PNG image file">
 					<button class="btn btn-primary" id="importBtn" aria-label="Import PNG image">
-						IMPORT PNG
+						Import PNG
 					</button>
 				</div>
 			</section>
@@ -67,23 +65,18 @@
 				<!-- Color Mappings Panel -->
 				<section class="panel control-panel">
 					<div class="panel-header">
-						<h2>COLOR MAPPINGS</h2>
+						<h2>Color mappings</h2>
 						<span class="color-count" id="colorCount">0 colors</span>
 					</div>
-
-					<p class="instructions">
-						Assign an ID to each color.<br>
-						Each color becomes an item.
-					</p>
 
 					<div class="color-toolbar">
 						<input type="text" id="colorSearch" class="color-search" placeholder="Search colors..." autocomplete="off" aria-label="Search colors by hex, RGB, or ID">
 						<div class="toolbar-buttons">
 							<button class="btn btn-small" id="exportMappingsBtn" title="Export color mappings to JSON" aria-label="Export color mappings">
-								EXPORT
+								Export
 							</button>
 							<button class="btn btn-small" id="importMappingsBtn" title="Import color mappings from JSON" aria-label="Import color mappings">
-								IMPORT
+								Import
 							</button>
 						</div>
 					</div>
@@ -96,38 +89,55 @@
 						</div>
 					</div>
 
+					<div class="simplify-section" id="simplifySection" hidden>
+						<p class="simplify-hint" id="simplifyHint"></p>
+						<div class="setting-row">
+							<label for="targetColorCount">Target colors</label>
+							<input type="number" id="targetColorCount" value="30" min="2" max="256" class="input-small" aria-label="Number of colors after simplification">
+						</div>
+						<button type="button" class="btn btn-primary simplify-btn" id="simplifyColorsBtn" aria-label="Reduce image to target number of colors">
+							Simplify colors
+						</button>
+					</div>
+
 					<div class="settings-section">
 					<div class="setting-row">
-						<label for="clientVersion">Client Version:</label>
+						<label for="clientVersion">Client version</label>
 						<select id="clientVersion" class="input-select" aria-label="Select Tibia client version">
 							<!-- Options will be populated by JavaScript -->
 						</select>
 					</div>
 					
 					<div class="setting-row">
-						<label for="transparentTileId">Transparent Tile ID:</label>
+						<label for="transparentTileId">Transparent tile ID</label>
 						<input type="number" id="transparentTileId" value="0" min="0" max="65535" class="input-small" placeholder="0 = skip" aria-label="Tile ID for transparent pixels">
 					</div>
 					
 					<div class="setting-row">
-						<label for="zLevel">Z-Level (Floor):</label>
+						<label for="zLevel">Z level</label>
 						<input type="number" id="zLevel" value="7" min="0" max="15" class="input-small" aria-label="Floor level (0-15)">
 					</div>
 					
 					<div class="setting-row">
-						<label for="offsetX">Offset X:</label>
+						<label for="offsetX">Offset X</label>
 						<input type="number" id="offsetX" value="0" min="0" class="input-small" aria-label="X coordinate offset">
 					</div>
 					
 					<div class="setting-row">
-						<label for="offsetY">Offset Y:</label>
+						<label for="offsetY">Offset Y</label>
 						<input type="number" id="offsetY" value="0" min="0" class="input-small" aria-label="Y coordinate offset">
 					</div>
 				</div>
 
-				<button class="btn btn-success" id="generateBtn" disabled aria-label="Generate OTBM file">
-					GENERATE
-				</button>
+				<div class="generate-actions">
+					<button class="btn btn-success" id="generateBtn" disabled aria-label="Generate OTBM file">
+						Generate
+					</button>
+					<label class="ignore-limits-label" for="ignoreSizeLimits">
+						<input type="checkbox" id="ignoreSizeLimits" aria-label="Ignore pixel count and dimension limits">
+						Ignore size limits
+					</label>
+				</div>
 
 				<div class="progress-container" id="progressContainer" style="display: none;">
 					<div class="progress-bar">
@@ -142,7 +152,7 @@
 				<!-- Favorites Panel -->
 				<section class="panel favorites-panel">
 					<div class="panel-header">
-						<h2>FAVORITES </h2>
+						<h2>Favorites</h2>
 						<button class="btn btn-small btn-icon-only" id="addFavoriteBtn" title="Add favorite" aria-label="Add favorite">
 							+
 						</button>

@@ -4,6 +4,11 @@
  * Handles image loading, color detection, and OTBM generation.
  */
 
+const RECOMMENDED_MAX_COLORS = 30;
+const HARD_MAX_COLORS = 256;
+const KMEANS_SAMPLE_SIZE = 8000;
+const KMEANS_ITERATIONS = 12;
+
 class PNGToOTBMApp {
 	constructor() {
 		// State
@@ -11,6 +16,9 @@ class PNGToOTBMApp {
 		this.imageData = null;
 		this.colorMappings = new Map(); // color hex -> { color, tileId, count }
 		this.transparentPixelCount = 0; // Count of transparent pixels
+		this.imageExceedsLimits = false; // Image exceeds recommended pixel/dimension limits
+		this.uniqueColorCount = 0; // Unique opaque colors in current image
+		this.requiresSimplify = false; // More colors than HARD_MAX_COLORS
 		this.filteredColors = null; // Filtered color list for search
 		this.zoomLevel = 1.0; // Current zoom level (1.0 = 100%)
 		this.minZoom = 0.1; // Minimum zoom (10%)
@@ -28,6 +36,7 @@ class PNGToOTBMApp {
 		this.colorCount = document.getElementById('colorCount');
 		this.emptyState = document.getElementById('emptyState');
 		this.generateBtn = document.getElementById('generateBtn');
+		this.ignoreSizeLimits = document.getElementById('ignoreSizeLimits');
 		this.status = document.getElementById('status');
 		this.clientVersion = document.getElementById('clientVersion');
 		this.transparentTileId = document.getElementById('transparentTileId');
@@ -48,6 +57,10 @@ class PNGToOTBMApp {
 		this.addFavoriteBtn = document.getElementById('addFavoriteBtn');
 		this.favoritesList = document.getElementById('favoritesList');
 		this.favoritesEmptyState = document.getElementById('favoritesEmptyState');
+		this.simplifySection = document.getElementById('simplifySection');
+		this.simplifyHint = document.getElementById('simplifyHint');
+		this.targetColorCount = document.getElementById('targetColorCount');
+		this.simplifyColorsBtn = document.getElementById('simplifyColorsBtn');
 		
 		// Canvas context
 		this.ctx = this.previewCanvas.getContext('2d');
@@ -124,6 +137,9 @@ class PNGToOTBMApp {
 		
 		// Generate button
 		this.generateBtn.addEventListener('click', () => this._generateOTBM());
+		this.ignoreSizeLimits.addEventListener('change', () => this._updateGenerateButtonState());
+		this.simplifyColorsBtn.addEventListener('click', () => this._handleSimplifyColors());
+		this.targetColorCount.addEventListener('change', () => this._saveSettings());
 		
 		// Color search
 		this.colorSearch.addEventListener('input', () => this._filterColors());
@@ -200,41 +216,30 @@ class PNGToOTBMApp {
 			const img = new Image();
 			
 			img.onload = () => {
-				// Check image complexity before processing
 				const complexityCheck = this._checkImageComplexity(img.width, img.height);
-				if (!complexityCheck.valid) {
-					this._updateStatus(complexityCheck.error, 'error');
-					this.image = null;
-					this.imageData = null;
-					this.colorMappings.clear();
-					this.filteredColors = null;
-					this.colorSearch.value = '';
-					this._buildColorList();
-					this.generateBtn.disabled = true;
-					// Reset preview
-					this.previewPlaceholder.style.display = 'block';
-					this.previewCanvas.classList.remove('visible');
-					this.imageInfo.textContent = 'No image loaded';
-					return;
-				}
+				this.imageExceedsLimits = !complexityCheck.valid;
 				
-			this.image = img;
-			// Calculate initial zoom to fit container
-			const containerRect = this.previewContainer.getBoundingClientRect();
-			const maxWidth = containerRect.width - 32;
-			const maxHeight = containerRect.height - 32;
-			const fitScale = Math.min(
-				maxWidth / img.width,
-				maxHeight / img.height,
-				1.0 // Don't zoom in beyond 100% initially
-			);
-			this.zoomLevel = Math.max(fitScale, this.minZoom);
+				this.image = img;
+				const containerRect = this.previewContainer.getBoundingClientRect();
+				const maxWidth = containerRect.width - 32;
+				const maxHeight = containerRect.height - 32;
+				const fitScale = Math.min(
+					maxWidth / img.width,
+					maxHeight / img.height,
+					1.0
+				);
+				this.zoomLevel = Math.max(fitScale, this.minZoom);
 				this._updatePreview();
-				// Analyze colors - this will show error if too complex
 				const colorAnalysisResult = this._analyzeColors();
-				// Only show success if color analysis passed
-				if (colorAnalysisResult && colorAnalysisResult.success) {
-					this._updateStatus(`Loaded: ${file.name}`, 'success');
+				if (colorAnalysisResult?.success) {
+					if (this.imageExceedsLimits) {
+						this._updateStatus(
+							`${complexityCheck.error} Enable "Ignore size limits" to generate.`,
+							'warning'
+						);
+					} else if (this.uniqueColorCount <= RECOMMENDED_MAX_COLORS) {
+						this._updateStatus(`Loaded: ${file.name}`, 'success');
+					}
 				}
 			};
 			
@@ -255,8 +260,8 @@ class PNGToOTBMApp {
 	 * @returns {Object} { valid: boolean, error: string }
 	 */
 	_checkImageComplexity(width, height) {
-		const MAX_DIMENSION = 4500; // Maximum width or height
-		const MAX_TOTAL_PIXELS = 13500000; // 4500 × 3000 = 13,500,000 pixels - this was tested and it works fine
+		const MAX_DIMENSION = 5000; // Maximum width or height
+		const MAX_TOTAL_PIXELS = 23500000; // 4500 × 3000 = 13,500,000 pixels - this was tested and it works fine
 		const totalPixels = width * height;
 		
 		// Check dimensions
@@ -551,7 +556,6 @@ class PNGToOTBMApp {
 		
 		// Count colors
 		const colorCounts = new Map();
-		const MAX_COLORS = 256; // Maximum number of unique colors
 		let transparentCount = 0;
 		
 		for (let i = 0; i < pixels.length; i += 4) {
@@ -560,7 +564,6 @@ class PNGToOTBMApp {
 			const b = pixels[i + 2];
 			const a = pixels[i + 3];
 			
-			// Count transparent pixels
 			if (a < 128) {
 				transparentCount++;
 				continue;
@@ -568,28 +571,25 @@ class PNGToOTBMApp {
 			
 			const hex = this._rgbToHex(r, g, b);
 			colorCounts.set(hex, (colorCounts.get(hex) || 0) + 1);
-			
-			// Check if too many unique colors (check immediately after adding)
-			if (colorCounts.size > MAX_COLORS) {
-				const errorMessage = `Image too complex: ${colorCounts.size} unique colors detected. Maximum: ${MAX_COLORS} colors. Please reduce color complexity (use fewer colors or quantize the image).`;
-				this._updateStatus(errorMessage, 'error');
-				this.image = null;
-				this.imageData = null;
-				this.colorMappings.clear();
-				this.filteredColors = null;
-				this.colorSearch.value = '';
-				this._buildColorList();
-				this.generateBtn.disabled = true;
-				// Reset preview
-				this.previewPlaceholder.style.display = 'block';
-				this.previewCanvas.classList.remove('visible');
-				this.imageInfo.textContent = 'No image loaded';
-				// Show empty state
-				if (this.emptyState) {
-					this.emptyState.classList.remove('hidden');
-				}
-				return { success: false };
-			}
+		}
+		
+		this.uniqueColorCount = colorCounts.size;
+		this.requiresSimplify = this.uniqueColorCount > HARD_MAX_COLORS;
+		
+		if (this.requiresSimplify) {
+			this.transparentPixelCount = transparentCount;
+			this.colorMappings.clear();
+			this.filteredColors = null;
+			this.colorSearch.value = '';
+			this._buildColorList();
+			this.colorCount.textContent = `${this.uniqueColorCount} colors`;
+			this._updateSimplifyPanel();
+			this._updateGenerateButtonState();
+			this._updateStatus(
+				`Image has ${this.uniqueColorCount} unique colors (max ${HARD_MAX_COLORS}). Set a target and click Simplify colors.`,
+				'warning'
+			);
+			return { success: false, tooManyColors: true };
 		}
 		
 		// Sort by count (most common first)
@@ -630,9 +630,14 @@ class PNGToOTBMApp {
 		}
 		this.colorCount.textContent = countText;
 		
-		// Enable generate button
-		if (this.colorMappings.size > 0 || transparentCount > 0) {
-			this.generateBtn.disabled = false;
+		this._updateSimplifyPanel();
+		this._updateGenerateButtonState();
+		
+		if (this.uniqueColorCount > RECOMMENDED_MAX_COLORS) {
+			this._updateStatus(
+				`${this.uniqueColorCount} colors detected (recommended ≤ ${RECOMMENDED_MAX_COLORS}). You can simplify below.`,
+				'warning'
+			);
 		}
 		
 		return { success: true };
@@ -763,6 +768,246 @@ class PNGToOTBMApp {
 	}
 	
 	/**
+	 * Enable or disable the Generate button based on image state and size limits
+	 */
+	_updateGenerateButtonState() {
+		const hasMappableContent = this.colorMappings.size > 0 || this.transparentPixelCount > 0;
+		const limitsOk = !this.imageExceedsLimits || this.ignoreSizeLimits.checked;
+		const colorsOk = !this.requiresSimplify;
+		this.generateBtn.disabled = !this.image || !this.imageData || !hasMappableContent || !limitsOk || !colorsOk;
+	}
+	
+	/**
+	 * Show or hide the simplify-colors panel based on unique color count
+	 */
+	_updateSimplifyPanel() {
+		if (!this.image) {
+			this.simplifySection.hidden = true;
+			return;
+		}
+		
+		const show = this.uniqueColorCount > RECOMMENDED_MAX_COLORS || this.requiresSimplify;
+		this.simplifySection.hidden = !show;
+		
+		if (!show) return;
+		
+		const maxTarget = Math.max(2, Math.min(HARD_MAX_COLORS, this.uniqueColorCount - 1));
+		this.targetColorCount.max = String(maxTarget);
+		
+		const currentTarget = parseInt(this.targetColorCount.value, 10);
+		if (!Number.isFinite(currentTarget) || currentTarget < 2 || currentTarget > maxTarget) {
+			this.targetColorCount.value = String(Math.min(RECOMMENDED_MAX_COLORS, maxTarget));
+		}
+		
+		if (this.requiresSimplify) {
+			this.simplifyHint.textContent = `This image has ${this.uniqueColorCount} unique colors. Choose a target (2–${maxTarget}) and simplify before generating. Similar shades merge into one palette color.`;
+		} else {
+			this.simplifyHint.textContent = `${this.uniqueColorCount} colors detected (recommended ≤ ${RECOMMENDED_MAX_COLORS}). Merge similar shades into fewer colors for easier tile mapping.`;
+		}
+		
+		this.simplifyColorsBtn.disabled = this.uniqueColorCount <= 2;
+	}
+	
+	/**
+	 * Reduce image palette to user-chosen color count (k-means in RGB)
+	 */
+	async _handleSimplifyColors() {
+		if (!this.image || !this.imageData) {
+			this._updateStatus('No image loaded', 'error');
+			return;
+		}
+		
+		const maxTarget = Math.max(2, Math.min(HARD_MAX_COLORS, this.uniqueColorCount - 1));
+		let k = parseInt(this.targetColorCount.value, 10);
+		if (!Number.isFinite(k)) k = RECOMMENDED_MAX_COLORS;
+		k = Math.max(2, Math.min(maxTarget, k));
+		this.targetColorCount.value = String(k);
+		
+		if (k >= this.uniqueColorCount) {
+			this._updateStatus('Target is not lower than the current color count', 'warning');
+			return;
+		}
+		
+		const beforeCount = this.uniqueColorCount;
+		this.simplifyColorsBtn.disabled = true;
+		this._updateStatus(`Simplifying to ${k} colors…`, '');
+		
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			
+			const simplified = this._quantizeImageData(this.imageData, k);
+			await this._applyImageDataToPreview(simplified);
+			
+			const result = this._analyzeColors();
+			if (result?.success) {
+				this._updatePreview();
+				this._updateStatus(
+					`Simplified palette: ${beforeCount} → ${this.uniqueColorCount} colors`,
+					'success'
+				);
+			} else if (result?.tooManyColors) {
+				this._updateStatus(
+					`Reduced to ${this.uniqueColorCount} colors; still above ${HARD_MAX_COLORS}. Lower the target and simplify again.`,
+					'warning'
+				);
+			}
+		} catch (error) {
+			this._updateStatus(`Simplify failed: ${error.message}`, 'error');
+		} finally {
+			this.simplifyColorsBtn.disabled = this.uniqueColorCount <= 2;
+		}
+	}
+	
+	/**
+	 * k-means quantize opaque pixels; transparent pixels unchanged
+	 */
+	_quantizeImageData(sourceData, k) {
+		const { width, height, data: src } = sourceData;
+		const out = new ImageData(width, height);
+		const dst = out.data;
+		dst.set(src);
+		
+		const samples = [];
+		for (let i = 0; i < src.length; i += 4) {
+			if (src[i + 3] < 128) continue;
+			samples.push([src[i], src[i + 1], src[i + 2]]);
+		}
+		
+		if (samples.length === 0) return out;
+		
+		const unique = new Set(samples.map(([r, g, b]) => `${r},${g},${b}`));
+		const effectiveK = Math.min(k, unique.size);
+		if (effectiveK >= unique.size) return out;
+		
+		const centroids = this._kMeansCentroids(samples, effectiveK);
+		
+		for (let i = 0; i < src.length; i += 4) {
+			if (src[i + 3] < 128) continue;
+			const [r, g, b] = this._nearestCentroid(src[i], src[i + 1], src[i + 2], centroids);
+			dst[i] = r;
+			dst[i + 1] = g;
+			dst[i + 2] = b;
+			dst[i + 3] = src[i + 3];
+		}
+		
+		return out;
+	}
+	
+	/**
+	 * Run k-means on a sample of RGB points; returns centroid list
+	 */
+	_kMeansCentroids(samples, k) {
+		const n = samples.length;
+		const trainCount = Math.min(n, KMEANS_SAMPLE_SIZE);
+		const train = [];
+		const used = new Set();
+		while (train.length < trainCount) {
+			const idx = (Math.random() * n) | 0;
+			if (used.has(idx)) continue;
+			used.add(idx);
+			train.push(samples[idx]);
+		}
+		
+		const centroids = [];
+		const firstIdx = (Math.random() * trainCount) | 0;
+		centroids.push(train[firstIdx].slice());
+		
+		while (centroids.length < k) {
+			const distances = train.map((p) => {
+				let min = Infinity;
+				for (const c of centroids) {
+					const d = this._colorDistSq(p, c);
+					if (d < min) min = d;
+				}
+				return min;
+			});
+			const total = distances.reduce((a, b) => a + b, 0);
+			let pick = Math.random() * total;
+			let chosen = 0;
+			for (let i = 0; i < distances.length; i++) {
+				pick -= distances[i];
+				if (pick <= 0) {
+					chosen = i;
+					break;
+				}
+			}
+			centroids.push(train[chosen].slice());
+		}
+		
+		const assignments = new Array(trainCount);
+		for (let iter = 0; iter < KMEANS_ITERATIONS; iter++) {
+			const sums = Array.from({ length: k }, () => [0, 0, 0, 0]);
+			for (let i = 0; i < trainCount; i++) {
+				const ci = this._nearestCentroidIndex(train[i], centroids);
+				assignments[i] = ci;
+				sums[ci][0] += train[i][0];
+				sums[ci][1] += train[i][1];
+				sums[ci][2] += train[i][2];
+				sums[ci][3]++;
+			}
+			for (let c = 0; c < k; c++) {
+				if (sums[c][3] === 0) {
+					centroids[c] = train[(Math.random() * trainCount) | 0].slice();
+				} else {
+					centroids[c] = [
+						Math.round(sums[c][0] / sums[c][3]),
+						Math.round(sums[c][1] / sums[c][3]),
+						Math.round(sums[c][2] / sums[c][3])
+					];
+				}
+			}
+		}
+		
+		return centroids;
+	}
+	
+	_colorDistSq(a, b) {
+		const dr = a[0] - b[0];
+		const dg = a[1] - b[1];
+		const db = a[2] - b[2];
+		return dr * dr + dg * dg + db * db;
+	}
+	
+	_nearestCentroidIndex(rgb, centroids) {
+		let best = 0;
+		let bestD = Infinity;
+		for (let i = 0; i < centroids.length; i++) {
+			const d = this._colorDistSq(rgb, centroids[i]);
+			if (d < bestD) {
+				bestD = d;
+				best = i;
+			}
+		}
+		return best;
+	}
+	
+	_nearestCentroid(r, g, b, centroids) {
+		return centroids[this._nearestCentroidIndex([r, g, b], centroids)];
+	}
+	
+	/**
+	 * Replace working image from ImageData and refresh preview bitmap
+	 */
+	_applyImageDataToPreview(imageData) {
+		return new Promise((resolve, reject) => {
+			const canvas = document.createElement('canvas');
+			canvas.width = imageData.width;
+			canvas.height = imageData.height;
+			canvas.getContext('2d').putImageData(imageData, 0, 0);
+			
+			const dataUrl = canvas.toDataURL('image/png');
+			const img = new Image();
+			img.onload = () => {
+				this.image = img;
+				this.imageData = imageData;
+				resolve();
+			};
+			img.onerror = () => reject(new Error('Failed to update preview image'));
+			img.src = dataUrl;
+		});
+	}
+	
+	/**
 	 * Generate the OTBM file
 	 */
 	_generateOTBM() {
@@ -772,9 +1017,14 @@ class PNGToOTBMApp {
 				return;
 			}
 			
-			// Get image dimensions first
 			const width = this.image.width;
 			const height = this.image.height;
+			
+			const complexityCheck = this._checkImageComplexity(width, height);
+			if (!complexityCheck.valid && !this.ignoreSizeLimits.checked) {
+				this._updateStatus(complexityCheck.error, 'error');
+				return;
+			}
 			
 			// Check for ID 0 warnings
 			const zeroIds = [...this.colorMappings.values()].filter(m => m.tileId === 0);
@@ -968,6 +1218,10 @@ class PNGToOTBMApp {
 				if (parsed.zLevel !== undefined) this.zLevel.value = parsed.zLevel;
 				if (parsed.offsetX !== undefined) this.offsetX.value = parsed.offsetX;
 				if (parsed.offsetY !== undefined) this.offsetY.value = parsed.offsetY;
+				if (parsed.targetColorCount !== undefined) {
+					const t = Math.max(2, Math.min(256, parseInt(parsed.targetColorCount, 10) || RECOMMENDED_MAX_COLORS));
+					this.targetColorCount.value = t;
+				}
 			}
 		} catch (error) {
 			console.warn('Failed to load settings:', error);
@@ -984,7 +1238,8 @@ class PNGToOTBMApp {
 				transparentTileId: parseInt(this.transparentTileId.value) || 0,
 				zLevel: parseInt(this.zLevel.value) || 7,
 				offsetX: parseInt(this.offsetX.value) || 0,
-				offsetY: parseInt(this.offsetY.value) || 0
+				offsetY: parseInt(this.offsetY.value) || 0,
+				targetColorCount: parseInt(this.targetColorCount.value, 10) || RECOMMENDED_MAX_COLORS
 			};
 			localStorage.setItem('pngToOtbmSettings', JSON.stringify(settings));
 		} catch (error) {
