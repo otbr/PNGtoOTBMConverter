@@ -231,13 +231,13 @@ class PNGToOTBMApp {
 				this.zoomLevel = Math.max(fitScale, this.minZoom);
 				this._updatePreview();
 				const colorAnalysisResult = this._analyzeColors();
-				if (colorAnalysisResult?.success) {
+				if (colorAnalysisResult?.success || colorAnalysisResult?.tooManyColors) {
 					if (this.imageExceedsLimits) {
 						this._updateStatus(
 							`${complexityCheck.error} Enable "Ignore size limits" to generate.`,
 							'warning'
 						);
-					} else if (this.uniqueColorCount <= RECOMMENDED_MAX_COLORS) {
+					} else {
 						this._updateStatus(`Loaded: ${file.name}`, 'success');
 					}
 				}
@@ -585,10 +585,6 @@ class PNGToOTBMApp {
 			this.colorCount.textContent = `${this.uniqueColorCount} colors`;
 			this._updateSimplifyPanel();
 			this._updateGenerateButtonState();
-			this._updateStatus(
-				`Image has ${this.uniqueColorCount} unique colors (max ${HARD_MAX_COLORS}). Set a target and click Simplify colors.`,
-				'warning'
-			);
 			return { success: false, tooManyColors: true };
 		}
 		
@@ -632,13 +628,6 @@ class PNGToOTBMApp {
 		
 		this._updateSimplifyPanel();
 		this._updateGenerateButtonState();
-		
-		if (this.uniqueColorCount > RECOMMENDED_MAX_COLORS) {
-			this._updateStatus(
-				`${this.uniqueColorCount} colors detected (recommended ≤ ${RECOMMENDED_MAX_COLORS}). You can simplify below.`,
-				'warning'
-			);
-		}
 		
 		return { success: true };
 	}
